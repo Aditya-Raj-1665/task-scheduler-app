@@ -4,6 +4,8 @@
 
 A full-stack web application demonstrating asynchronous task scheduling using a distributed architecture. Users can schedule tasks via a React frontend (styled with Chakra UI), which are saved persistently in MongoDB. A FastAPI backend periodically checks for due tasks based on their schedule and queues them in Redis. A separate Celery worker picks up tasks from the Redis queue and executes them (currently prints the task name).
 
+![Task Scheduler UI](./images/UI.png)
+
 ## 🛠️ Technologies Used
 
 Frontend: React, Chakra UI, Axios
@@ -127,6 +129,8 @@ cd worker
 # Run the Celery beat scheduler
 celery -A tasks beat --loglevel=INFO
 ```
+
+![Terminal 5](./images/terminal 5.png)
 
 ## 📁 Project Structure
 ```
