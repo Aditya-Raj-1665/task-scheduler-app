@@ -1,0 +1,16 @@
+version: '3.8'
+services:
+  mongo:
+    image: mongo:latest
+    ports:
+      - "27017:27017" 
+    volumes:
+      - mongo-data:/data/db
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6340:6379" #device available port= 6340
+
+volumes:
+  mongo-data:
