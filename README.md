@@ -6,6 +6,9 @@ A full-stack web application demonstrating asynchronous task scheduling using a 
 
 ![Task Scheduler UI](./images/UI.png)
 
+![mongoDB](./images/mongoDB.png)
+
+
 ## 🛠️ Technologies Used
 
 Frontend: React, Chakra UI, Axios
@@ -50,6 +53,9 @@ This starts MongoDB and Redis containers in the background.
 ```
 docker-compose up -d
 ```
+
+![Terminal 2](./images/terminal2.png)
+
 
 (Note: Redis runs on host port 6340 in this setup, mapped to container port 6379).
 
@@ -113,6 +119,9 @@ pip install -r requirements.txt
 celery -A tasks worker --loglevel=INFO --pool=solo
 ```
 
+![Terminal 4](./images/terminal4.png)
+
+
 ### 6. Set up Beat (Celery Scheduler) - Terminal 5
 
 This process periodically triggers the task checker defined in tasks.py.
@@ -130,7 +139,7 @@ cd worker
 celery -A tasks beat --loglevel=INFO
 ```
 
-![Terminal 5](./images/terminal 5.png)
+![Terminal 5](./images/terminal5.png)
 
 ## 📁 Project Structure
 ```
