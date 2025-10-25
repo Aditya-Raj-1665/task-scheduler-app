@@ -54,7 +54,6 @@ This starts MongoDB and Redis containers in the background.
 docker-compose up -d
 ```
 
-![Terminal 2](./images/terminal2.png)
 
 
 (Note: Redis runs on host port 6340 in this setup, mapped to container port 6379).
@@ -79,6 +78,8 @@ pip install -r requirements.txt
 # Run the FastAPI server
 uvicorn main:app --reload
 ```
+
+![Terminal 2](./images/terminal2.png)
 
 (Server will run on http://localhost:8000)
 
