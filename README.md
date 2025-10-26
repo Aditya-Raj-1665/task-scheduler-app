@@ -177,7 +177,11 @@ Expired tasks are visually indicated (grayed out/strikethrough).
 FastAPI backend periodically checks MongoDB for tasks due to run (within start/end dates).
 
 Due tasks are pushed to a Redis list acting as a queue.
+You can check , number of pending task, by running following command in TERMINAL 1:
+```
+docker-compose exec redis redis-cli llen task_queue
+```
 
-Celery Beat periodically triggers a task checker defined in tasks.py (every 5 seconds).
+Celery Beat periodically triggers a task checker defined in tasks.py (every 5 seconds) : TERMINAL 5.
 
-Celery Worker picks up task names from the Redis queue and executes the corresponding task (prints task name to its console).
+Celery Worker picks up task names from the Redis queue and executes the corresponding task (prints task name to its console) : TERMINAL 4.
