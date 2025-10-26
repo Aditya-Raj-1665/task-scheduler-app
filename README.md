@@ -164,7 +164,7 @@ celery -A tasks beat --loglevel=INFO
 └── README.md           # This file
 ```
 
-## ✨ Features
+## ✨ Features & Results
 
 Schedule tasks with name, cron string, start date, and end date via a web UI (React + Chakra UI).
 
