@@ -114,7 +114,7 @@ python -m venv venv
 # source venv/bin/activate
 
 # Install worker dependencies FROM the requirements file
-pip install -r requirements.txt 
+python -m pip install -r requirements.txt
 
 # Run the Celery worker (use --pool=solo on Windows)
 celery -A tasks worker --loglevel=INFO --pool=solo
