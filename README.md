@@ -73,7 +73,7 @@ python -m venv venv
 # source venv/bin/activate
 
 # Install backend dependencies FROM the requirements file
-pip install -r requirements.txt 
+python -m pip install -r requirements.txt 
 
 # Run the FastAPI server
 uvicorn main:app --reload
