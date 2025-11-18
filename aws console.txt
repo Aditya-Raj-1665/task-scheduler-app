@@ -1,0 +1,23 @@
+import json
+
+def lambda_handler(event, context):
+    # The 'event' is the payload we sent from Celery
+    print(f"Received event: {json.dumps(event)}")
+
+    # 1. Get the task_name from the event
+    task_name = event.get("task_name", "NoTaskNameSent")
+
+    # 2.
+    # --- DO YOUR REAL WORK HERE ---
+    # (e.g., run a database query, send an email, etc.)
+    # For now, we'll just log it and send a success message back.
+    #
+    print(f"Successfully processed task: {task_name}")
+
+    # 3. Send a response back to Celery
+    response_message = f"Lambda successfully executed task: {task_name}"
+
+    return {
+        'statusCode': 200,
+        'body': json.dumps(response_message)
+    }
