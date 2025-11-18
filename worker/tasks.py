@@ -18,10 +18,6 @@ lambda_client = boto3.client('lambda', region_name=LAMBDA_REGION)
 
 @app.task
 def check_redis_queue():
-    """
-    This is the periodic task that runs every 5 seconds.
-    It checks the 'task_queue' list in Redis (db=0).
-    """
 
     print("[Celery Beat]: Checking Redis 'batch_run'...")
 
@@ -51,10 +47,6 @@ def check_redis_queue():
 
 @app.task
 def print_the_name(name):
-    """
-    This is the task that does the final work.
-    It's called by 'check_redis_queue'.
-    """
     print("-----------------------------------")
     print(f"[Celery Worker]: EXECUTING TASK: {name}")
     print("-----------------------------------")
@@ -64,9 +56,6 @@ def print_the_name(name):
 
 @app.task
 def mark_completed(task_name):
-    """
-    This task updates the MongoDB 'queue_table' to mark a task as 'completed'.
-    """
     print(f"[Celery Worker]: Marking task '{task_name}' as completed...")
     
     client = None
@@ -95,15 +84,10 @@ def mark_completed(task_name):
 
 @app.task
 def invoke_lambda_task(task_name):
-    """
-    This is the task that does the final work.
-    It's called by 'check_redis_queue'.
-    It invokes (runs) an AWS Lambda function with the task name.
-    """
     print("-----------------------------------")
     print(f"[Celery Worker]: EXECUTING TASK: Invoking Lambda for '{task_name}'")
 
-    FUNCTION_NAME = "myCeleryTaskHandler" 
+    FUNCTION_NAME = "taskScheduler" 
 
     payload = {
         "task_name": task_name  

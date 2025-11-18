@@ -43,6 +43,7 @@ class TaskManager:
         await self.db.schedules.insert_one(task_doc)
         return {"message": "Task schedule created", "first_run": first_run}
 
+
     async def get_all_schedules(self):
         """
         Fetches all task schedules from the MongoDB database.
@@ -52,6 +53,7 @@ class TaskManager:
         async for task in due_tasks_cursor:
             tasks_list.append(TaskInDB(**task_dict))
         return tasks_list
+
 
     async def delete_schedule(self, task_id: str):
         try:
@@ -170,6 +172,7 @@ class TaskManager:
                 if room_available <= 0:
                     print("[TaskManager Loop 2]: 'batch_run' is full. No new tasks will be added.")
 
+
                 if room_available > 0:
                     print(f"[TaskManager Loop 2]: Selecting up to {room_available} pending tasks from 'queue_table'...")
 
@@ -188,7 +191,7 @@ class TaskManager:
                             {"$set": {"status": "running", "last_updated": datetime.now(timezone.utc)}}
                         )
                         
-                        #pushing tasks in batch
+                        #--pushing tasks in batch--
                         for task_name in task_names_in_batch:
                             await self.redis.lpush("batch_run", task_name)
                         
