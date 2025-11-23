@@ -76,8 +76,7 @@ class TaskManager:
             # return tasks_names_to_push_in_redis
 
             # print("will run after 60 seconds")
-            await asyncio.sleep(2)
-
+            await asyncio.sleep(60)
 
 
     async def fun_queue_manager(self,tasks_ready_to_run_based_on_date_condition : list):
