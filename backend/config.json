@@ -1,3 +1,4 @@
 {
+    "max_parallelism": 10,
     "BATCH_SIZE": 10
 }

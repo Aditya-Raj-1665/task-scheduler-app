@@ -2,11 +2,12 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 
 class TaskSchedule(BaseModel):
-    name: str
+    task_name: str
     cron: str  # "*/1 * * * *" 
     start_date: datetime
     end_date: datetime
     priority: int = 3
+    # status: str
 
     class Config:
         arbitrary_types_allowed = True

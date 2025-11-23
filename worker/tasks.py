@@ -6,6 +6,10 @@ from celery.schedules import crontab
 import redis
 from botocore.exceptions import ClientError
 from pymongo import MongoClient
+from bson.objectid import ObjectId
+
+mongo_client = MongoClient("mongodb://localhost:27017")
+db = mongo_client.tasks_db
 
 app = Celery('tasks',
              broker='redis://localhost:6340/1',
@@ -32,11 +36,11 @@ def check_redis_queue():
         task_name = task_name_bytes.decode('utf-8')
         print(f"[Celery Beat]: Found task! '{task_name}'. Sending to worker...")
 
-        #print_the_name.delay(task_name)
-        invoke_lambda_task.delay(task_name)
+        print_the_name.delay(task_name)
+        #invoke_lambda_task.delay(task_name)
 
         #MARK IT AS COMPLETED
-        mark_completed.delay(task_name)
+        # mark_completed.delay(task_name)
 
         task_done+=1
 
@@ -46,11 +50,22 @@ def check_redis_queue():
         print("[Celery Beat]: Batch_run is empty...No tasks found.")
 
 @app.task
-def print_the_name(name):
+def print_the_name(task_name):
     print("-----------------------------------")
-    print(f"[Celery Worker]: EXECUTING TASK: {name}")
+    print(f"[Celery Worker]: EXECUTING TASK: {task_name}")
     print("-----------------------------------")
-    return f"Task {name} processed."
+    delete_task_from_queue_table_and_schedules_table.delay(task_name)
+    return f"Task {task_name} processed."
+
+
+
+@app.task
+def delete_task_from_queue_table_and_schedules_table(task_name):
+    db.queue_table.delete_one({"task_name" : task_name})
+    db["schedules"].delete_one({"task_name" : task_name})
+    
+    print(f"delete kardiya {task_name}")
+
 
 
 

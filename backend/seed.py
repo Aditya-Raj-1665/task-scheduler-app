@@ -41,7 +41,7 @@ def seed_database():
             continue
             
         task_doc = {
-            "name": task_name,
+            "task_name": task_name,
             "cron": cron_string,
             "start_date": start_date,
             "end_date": end_date,
