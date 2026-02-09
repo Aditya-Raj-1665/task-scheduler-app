@@ -15,8 +15,8 @@ from models import TaskSchedule,TaskInDB
 
 # app = TaskManager(db, redis_client)
 # async def main_runner():
-#     # list_test2=await app.date_time_criteria()
-#     list_test=await app.run_scheduler_loop()
+#     list_test=await app.date_time_criteria()
+#     # list_test=await app.run_scheduler_loop()
 #     # list_test=await app.fun_queue_manager(list_test2)
 
 #     for task in list_test:

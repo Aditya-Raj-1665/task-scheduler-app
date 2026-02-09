@@ -139,3 +139,10 @@ app.conf.beat_schedule = {
     },  
 }
 app.conf.timezone = 'Asia/Kolkata'
+
+
+
+'''
+To test mannually:
+
+'''

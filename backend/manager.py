@@ -60,6 +60,7 @@ class TaskManager:
 
             tasks_ready_to_run_based_on_date_condition_and_priority_and_max_parallelism = await self.fun_queue_manager(tasks_ready_to_run_based_on_date_condition)
 
+            # made a list of just names, from json
             tasks_names_to_push_in_redis = [t["task_name"] for t in tasks_ready_to_run_based_on_date_condition_and_priority_and_max_parallelism]
 
             if tasks_names_to_push_in_redis:    
@@ -76,7 +77,7 @@ class TaskManager:
             # return tasks_names_to_push_in_redis
 
             # print("will run after 60 seconds")
-            await asyncio.sleep(2)
+            await asyncio.sleep(60)
 
 
 
