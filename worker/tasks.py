@@ -63,7 +63,6 @@ def print_the_name(task_name):
 def delete_task_from_queue_table_and_schedules_table(task_name):
     db.queue_table.delete_one({"task_name" : task_name})
     db["schedules"].delete_one({"task_name" : task_name})
-    
     print(f"delete kardiya {task_name}")
 
 
