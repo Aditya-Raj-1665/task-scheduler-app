@@ -1,7 +1,8 @@
-from pydantic import BaseModel, Field, field_validator, model_validator
-from datetime import datetime
+from pydantic import BaseModel, Field, field_validator, model_validator,ConfigDict
+from datetime import datetime,timezone
 from typing import Dict, Any, Optional
 from enum import Enum
+from croniter import croniter
 
 class TaskState(str,Enum):
     PENDING = "PENDING"             #sitting in DB1
@@ -65,19 +66,14 @@ class TaskInput(BaseModel):
     @model_validator(mode = "after")
     def end_date_must_be_after_start_date(self) -> "TaskInput":
         if self.end_date <=self.start_date:
-            raise ValueError("end_must be after start_date")
+            raise ValueError("end_date must be after start_date")
         return self
 
-    class Config:
-        # arbitrary_types_allowed = True
-        json_encoders = {datetime: lambda dt: dt.isoformat()}
+    model_config = ConfigDict(
+        populate_by_name=True,
+        json_encoders={datetime: lambda dt: dt.isoformat()}
+    )
 
-
-
-class TaskInDB(TaskInput):
-    id: str = Field(..., alias="_id")
-    next_run: datetime
-    
 class TaskInDB(TaskInput):
     """
     Full task document stored in MongoDB.
@@ -94,22 +90,23 @@ class TaskInDB(TaskInput):
     )
     num_of_retries: int = Field(
         default=0,
+        ge=0,
         description="How many retries have been attempted so far"
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow
+        default_factory=lambda: datetime.now(timezone.utc)
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow
+        default_factory=lambda: datetime.now(timezone.utc)
     )
     # Only populated once task starts running
     started_at: Optional[datetime] = Field(default=None)
     completed_at: Optional[datetime] = Field(default=None)
 
-    class Config:
-        populate_by_name = True          # allows both _id and id
-        json_encoders = {datetime: lambda dt: dt.isoformat()}
-
+    model_config = ConfigDict(
+        populate_by_name=True,
+        json_encoders={datetime: lambda dt: dt.isoformat()}
+    )
 
 
 # TODO: handle a case where a task have same name - even worse case, exactly same attributes
@@ -126,7 +123,7 @@ class TaskInRedis(BaseModel):
     priority: int
     cron : str
     next_run : datetime
-    num_of_retries: int = Field(default = 0)
+    num_of_retries: int = Field(default = 0, ge = 0)
     max_retries: int
     task_config: Dict[str, Any] = Field(default_factory = dict)
     
@@ -151,6 +148,36 @@ class TaskInRedis(BaseModel):
     def deserialize_from_redis(cls, data: str) -> "TaskInRedis":
         """Worker calls this when it pops from the queue"""
         return cls.model_validate_json(data)
+    
+    model_config = ConfigDict(
+        populate_by_name=True,
+        json_encoders={datetime: lambda dt: dt.isoformat()}
+    )
 
-    class Config:
-        json_encoders = {datetime: lambda dt: dt.isoformat()}
+class TaskResponse(BaseModel):
+    id: str
+    task_name: str
+    state: TaskState
+    next_run: datetime
+    priority: int
+    created_at: datetime
+
+@field_validator("cron")
+@classmethod
+def validate_cron(cls, v: str) -> str:
+    if not croniter.is_valid(v):
+        raise ValueError(f"Invalid cron expression : '{v}'")
+    return v
+
+@field_validator("start_date", "end_date", mode = "before")
+@classmethod
+def ensure_timezone_awareness(cls, v: datetime) -> datetime:
+    if isinstance(v, datetime) and v.tzinfo is None:
+        raise ValueError("Datetime must be timezone aware")
+    return v
+
+@model_validator(mode="after")
+def retries_within_bound(self) -> "TaskInDB":
+    if self.num_of_retries > self.max_retries:
+        raise ValueError("num_of_retries exceeded max_retries")
+    return self
