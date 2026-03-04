@@ -65,6 +65,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.post("/tasks/{task_name}/cancel")
+async def cancel_task(task_name: str):
+    await redis_client.set(f"cancel:{task_name}", "1")
+    return {"message": f"cancelled {task_name}"}
+
 # @app.post("/tasks")
 # async def create_task(task: TaskSchedule):
 #     return await task_manager.create_schedule(task)

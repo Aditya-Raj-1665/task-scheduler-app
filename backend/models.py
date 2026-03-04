@@ -181,3 +181,18 @@ def retries_within_bound(self) -> "TaskInDB":
     if self.num_of_retries > self.max_retries:
         raise ValueError("num_of_retries exceeded max_retries")
     return self
+
+
+# EXAMPLE TASK
+# {
+#   "task_name": "my_first_task",
+#   "priority": 1,
+#   "start_date": "2025-01-01T00:00:00",
+#   "end_date":   "2025-12-31T00:00:00",
+#   "task_config": {
+#     "operator_path":    "operators/example_operator.py",
+#     "payload":          { "task_name": "my_first_task" },
+#     "connection":       { "db_url": "mongodb://localhost:27017" },
+#     "timeout_seconds":  600
+#   }
+# }
