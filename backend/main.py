@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware 
 from typing import List
 from manager import TaskManager
-from models import TaskSchedule,TaskInDB
+from models import TaskInput,TaskInDB
 
 
 # mongo_client = AsyncIOMotorClient("mongodb://localhost:27017")

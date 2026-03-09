@@ -5,17 +5,28 @@ from enum import Enum
 from croniter import croniter
 
 class TaskState(str,Enum):
-    PENDING = "PENDING"             #sitting in DB1
-    READY = "READY"                 #in DB2 
-    RUNNING = "RUNNING"             #currently executing
-    COMPLETED = "COMPLETED"         #success
-    FAILED = "FAILED"               #for retry mechanism
+    CREATED = "CREATED"                     #user just added it
+    VALIDATING = "VALIDATING"               #being validated
+    INVALID = "INVALID"                     #validation failed
+    PENDING = "PENDING"                     #sitting in DB1(schedules table)
+    PAUSED = "PAUSED"                       #user paused it
+    READY = "READY"                         #in DB2 (queue_table)
+    ACQUIRING_LOCK = "ACQUIRING_LOCK"       #about to run, so getting lock
+    LOCK_FAILED = "LOCK_FAILED"             #failed to get lock
+    RUNNING = "RUNNING"                     #currently executing
+    COMPLETED = "COMPLETED"                 #success
+    FAILED = "FAILED"                       #for retry mechanism
+    TIMED_OUT = "TIMED_OUT"                 #exceeded running time, so timeout
+    CANCELLED = "CANCELLED"                 #user cancelled
+    RETRY = "RETRY"                         #waiting to retry
+    EXHAUSTED = "EXHAUSTED"                 #no retries left
 
 # user input task model
 class TaskInput(BaseModel):
-    '''
-    Base model with common fields
-    '''
+    """
+    What the user sends from the frontend to create a task.
+    This is the API input model.
+    """
     task_name: str = Field(
         ...,
         min_length=1,
@@ -31,7 +42,7 @@ class TaskInput(BaseModel):
     description: Optional[str] = Field(
         default=None,
         max_length=1000,
-        description="description of the task. OR what this Task does?"
+        description="description of the task. OR what the Task does?"
     )
     
     start_date: datetime = Field(
@@ -59,11 +70,25 @@ class TaskInput(BaseModel):
     )
     
     task_config: Dict[str, Any] = Field(
-        default_factory = dict,
+        default_factory = dict,                                     #default_factory?
         description="specific task configurations"
     )
     
-    @model_validator(mode = "after")
+    @field_validator("cron")
+    @classmethod
+    def validate_cron(cls, v: str) -> str:
+        if not croniter.is_valid(v):
+            raise ValueError(f"Invalid cron expression: '{v}'")
+        return v
+    
+    @field_validator("start_date","end_date", mode= "before")       #mode = before??
+    @classmethod
+    def ensure_timezone_awareness(cls , v: datetime) -> datetime:
+        if isinstance(v, datetime) and v.tzinfo is None:
+            raise ValueError(f"Datetime must be timezone aware")
+        return v
+    
+    @model_validator(mode = "after")                                #mode = "after" ??
     def end_date_must_be_after_start_date(self) -> "TaskInput":
         if self.end_date <=self.start_date:
             raise ValueError("end_date must be after start_date")
@@ -75,17 +100,21 @@ class TaskInput(BaseModel):
     )
 
 class TaskInDB(TaskInput):
+    # TODO : expand this taskindb model
     """
-    Full task document stored in MongoDB.
-    Extends TaskInput with all internal tracking fields.
+    Full task document as stored in MongoDB.
+    Extends TaskSchedule with all internal tracking fields.
     """
-    id: str = Field(..., alias="_id")
+    id: Optional[str] = Field(
+        default=None, alias="_id"
+    )
 
     state: TaskState = Field(
         default=TaskState.PENDING
     )
-    next_run: datetime = Field(
-        ...,
+    
+    next_run: Optional[datetime] = Field(
+        default=None,
         description="Next scheduled execution time (computed from cron)"
     )
     num_of_retries: int = Field(
@@ -99,16 +128,37 @@ class TaskInDB(TaskInput):
     updated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
-    # Only populated once task starts running
+    
     started_at: Optional[datetime] = Field(default=None)
     completed_at: Optional[datetime] = Field(default=None)
+    cancelled_at: Optional[datetime] = Field(default=None)
+    fail_reason: Optional[str] = Field(default=None)
+    
+    @model_validator(mode = "after")
+    def retries_within_bound(self) -> "TaskInDB":
+        if self.num_of_retries > self.max_retries:
+            raise ValueError("num_of_retries exceeded max_retries")
+        return self
+    
+    @classmethod
+    def from_mongo(cls , doc: dict) ->"TaskInDB":
+        """
+        Converts a raw MongoDB document to TaskInDB.
+        Handles ObjectId → str conversion cleanly.
+        """   
+        if doc is None:
+            return None
+        doc=dict(doc)
+        if "_id" in doc:
+            doc["_id"] = str(doc["_id"])
+        return cls(**doc)
 
     model_config = ConfigDict(
         populate_by_name=True,
         json_encoders={datetime: lambda dt: dt.isoformat()}
     )
 
-
+ 
 # TODO: handle a case where a task have same name - even worse case, exactly same attributes
 class TaskInRedis(BaseModel):
     """
@@ -161,27 +211,6 @@ class TaskResponse(BaseModel):
     next_run: datetime
     priority: int
     created_at: datetime
-
-@field_validator("cron")
-@classmethod
-def validate_cron(cls, v: str) -> str:
-    if not croniter.is_valid(v):
-        raise ValueError(f"Invalid cron expression : '{v}'")
-    return v
-
-@field_validator("start_date", "end_date", mode = "before")
-@classmethod
-def ensure_timezone_awareness(cls, v: datetime) -> datetime:
-    if isinstance(v, datetime) and v.tzinfo is None:
-        raise ValueError("Datetime must be timezone aware")
-    return v
-
-@model_validator(mode="after")
-def retries_within_bound(self) -> "TaskInDB":
-    if self.num_of_retries > self.max_retries:
-        raise ValueError("num_of_retries exceeded max_retries")
-    return self
-
 
 # EXAMPLE TASK
 # {

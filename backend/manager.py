@@ -6,7 +6,7 @@ from fastapi import HTTPException
 import json
 import os
 
-from models import TaskSchedule, TaskInDB
+from models import TaskInput, TaskInDB
 
 class TaskManager:
     def __init__(self, db, redis_client):
