@@ -70,18 +70,18 @@ async def cancel_task(task_name: str):
     await redis_client.set(f"cancel:{task_name}", "1")
     return {"message": f"cancelled {task_name}"}
 
-# @app.post("/tasks")
-# async def create_task(task: TaskSchedule):
-#     return await task_manager.create_schedule(task)
+@app.post("/tasks")
+async def create_task(task: TaskSchedule):
+    return await task_manager.create_schedule(task)
 
-# @app.get("/tasks", response_model=List[TaskInDB])
-# async def get_all_tasks():
-#     return await task_manager.get_all_schedules()
+@app.get("/tasks", response_model=List[TaskInDB])
+async def get_all_tasks():
+    return await task_manager.get_all_schedules()
 
-# @app.get("/tasks/queue", response_model=List[str])
-# async def get_tasks_in_queue():
-#     return await task_manager.fun_find()
+@app.get("/tasks/queue", response_model=List[str])
+async def get_tasks_in_queue():
+    return await task_manager.fun_find()
 
-# @app.delete("/tasks/{task_id}")
-# async def delete_task(task_id: str):
-#     return await task_manager.delete_schedule(task_id)
+@app.delete("/tasks/{task_id}")
+async def delete_task(task_id: str):
+    return await task_manager.delete_schedule(task_id)
