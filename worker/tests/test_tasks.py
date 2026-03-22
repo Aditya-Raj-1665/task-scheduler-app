@@ -1,3 +1,14 @@
+'''
+Test functions for task management operations.
+
+How to run:
+    1. Ensure MongoDB and Redis are running locally :
+        docker-compose up -d
+    3. pip install --upgrade pydantic pydantic-core
+    2. Run `pytest` in the worker/ directory to execute these tests. 
+           pytest worker/tests/test_tasks.py -v -s -p no:warnings
+'''
+
 import sys
 import os
 import time
@@ -7,21 +18,17 @@ import redis
 import threading
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "backend"))
 from tasks import (
+    app,
     get_task_config,
     spawn_operator_process,
     run_watchdog,
     handle_process_result,
-    delete_task_from_queue_table_and_schedules_table,
     check_redis_queue,
 )
-# @pytest.fixture(autouse=True) 
-# def setup_logger(real_config): 
-#     """Initialize logger before each test""" 
-#     initialize_logger(real_config) 
-#     yield 
-#     manager = get_logger_manager() 
-#     manager.clear_loggers()
+from models import TaskState
+app.conf.task_always_eager = True
 
 @pytest.fixture
 def mongo_db():
@@ -371,7 +378,7 @@ class TestHandleProcessResult:
         result = handle_process_result(
             "test_result_retry", exit_code=1,
             cancelled=cancelled, timed_out=timed_out,
-            stdout="", stderr="some error"
+            stdout="", stderr="some error", start_time=datetime.now(timezone.utc), attempt_num=1
         )
 
         assert result == "retry"

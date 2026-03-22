@@ -2,6 +2,11 @@ import signal
 import sys
 
 class BaseOperator:
+    """Abstract base class for all task operators.
+
+    Subclasses must implement initialize(), run(), and finish().
+    The finish() method is guaranteed to run even on SIGTERM (cancellation).
+    """
     def initialize(self, payload : dict , connection: dict):
         """setup -  run before work starts"""
         raise NotImplementedError
@@ -21,7 +26,8 @@ def run_operator(operator: BaseOperator, payload : dict , connection : dict):
     """
     
     def handle_sigterm(signum, frame):
-        print("[Opertor] SIGTERM received . Running finish() and exiting.")
+        """Handle SIGTERM by running finish() for graceful cleanup before exit."""
+        print("[Operator] SIGTERM received. Running finish() and exiting.")
         try:
             operator.finish()
         except Exception as e:

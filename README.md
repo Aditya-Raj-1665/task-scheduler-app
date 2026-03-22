@@ -1,187 +1,197 @@
-# 🏷️ FastAPI + Celery Task Scheduler
+# Task Scheduler
 
-## 📝 Description
+A distributed task scheduling system that lets you create, schedule, and execute recurring jobs through a web dashboard. You define tasks with cron expressions and date ranges — the system handles the rest: queuing, priority sorting, parallel execution, timeouts, cancellation, and automatic retries.
 
-A full-stack web application demonstrating asynchronous task scheduling using a distributed architecture. Users can schedule tasks via a React frontend (styled with Chakra UI), which are saved persistently in MongoDB. A FastAPI backend periodically checks for due tasks based on their schedule and queues them in Redis. A separate Celery worker picks up tasks from the Redis queue and executes them (currently prints the task name).
+## How It Works
+
+1. You schedule a task through the React frontend (name, cron expression, date range)
+2. FastAPI backend validates the input, computes the first run time, and saves it to MongoDB
+3. A background loop checks every 60 seconds for tasks that are due to run
+4. Due tasks are sorted by priority, inserted into a queue table, and pushed into a Redis list
+5. Celery Beat checks the Redis list every 5 seconds and dispatches tasks to Celery Workers
+6. Each worker spawns the task as an isolated subprocess with a watchdog thread monitoring for cancellation and timeouts
+7. After execution, tasks are cleaned up from both the queue and schedule tables
 
 ![Task Scheduler UI](./images/UI.png)
 
-![mongoDB](./images/mongoDB.png)
+## Tech Stack
 
+| Technology | Role |
+|---|---|
+| **React** | Frontend dashboard for creating, viewing, and deleting tasks |
+| **FastAPI** | REST API + background scheduler loop |
+| **MongoDB** | Persistent storage for task schedules and execution queue |
+| **Redis** | Message broker between scheduler and workers; also holds cancel signals |
+| **Celery** | Distributed task queue — worker executes jobs, beat triggers periodic checks |
+| **Docker Compose** | Runs MongoDB and Redis containers locally |
+| **motor** | Async MongoDB driver for FastAPI |
+| **croniter** | Parses and evaluates cron expressions |
+| **Pydantic** | Data validation for all API inputs and database models |
 
-## 🛠️ Technologies Used
+## Project Structure
 
-Frontend: React, Chakra UI, Axios
-
-Backend: FastAPI (Python), Uvicorn
-
-Database: MongoDB
-
-Message Broker / Queue: Redis
-
-Task Queue / Background Worker: Celery (Python)
-
-Containerization: Docker, Docker Compose
-
-Libraries: motor (Async MongoDB driver), redis-py (Async Redis driver), celery[redis], croniter
-
-## ⚙️ Setup and Installation
-
-Prerequisites
-
-Python 3.10+
-
-Node.js (v16+ recommended) & npm
-
-Docker Desktop
-
-Git
-
-## 🚀 How to Run
-
-Follow these steps precisely in separate terminal windows.
-
-### 1. Clone the Repository
 ```
+├── backend/
+│   ├── main.py              # FastAPI app, routes, lifespan (startup/shutdown)
+│   ├── manager.py           # TaskManager — scheduling loop, queue logic, CRUD
+│   ├── models.py            # Pydantic models (TaskInput, TaskInDB, TaskInRedis, etc.)
+│   ├── config.json          # Runtime config (max_parallelism, batch size)
+│   ├── seed.py              # Script to populate MongoDB with test tasks
+│   └── requirements.txt     # Python dependencies for backend
+│
+├── worker/
+│   ├── tasks.py             # Celery app, task definitions, watchdog, process spawning
+│   ├── base_operator.py     # BaseOperator abstract class + SIGTERM-safe runner
+│   ├── operators/           # Operator scripts (each task runs one of these)
+│   │   └── example_operator.py
+│   └── requirements.txt     # Python dependencies for worker
+│
+├── frontend/
+│   ├── src/
+│   │   ├── App.js           # Main React component — form + task list
+│   │   └── index.js         # React entry point
+│   ├── public/
+│   └── package.json
+│
+├── images/                  # Screenshots for documentation
+├── docker-compose.yml       # MongoDB + Redis services
+├── .env                     # Port configuration
+├── .gitignore
+├── WORKFLOW_VISUALIZATION.md  # Detailed architecture diagrams (Mermaid)
+└── README.md
+```
+
+## How to Run Locally
+
+### Prerequisites
+
+- **Python 3.10+**
+- **Node.js v16+** and npm
+- **Docker Desktop** (for MongoDB and Redis)
+- **Git**
+
+### 1. Clone the repository
+
+```bash
 git clone https://github.com/Aditya-Raj-1665/task-scheduler-app
+cd task-scheduler-app
 ```
-cd into it.
 
-### 2. Start Databases (Docker) - Terminal 1
+### 2. Start databases — Terminal 1
 
-This starts MongoDB and Redis containers in the background.
-```
+```bash
 docker-compose up -d
 ```
 
+This starts MongoDB (port 27017) and Redis (host port 6340 → container port 6379).
 
+### 3. Start the backend (FastAPI) — Terminal 2
 
-(Note: Redis runs on host port 6340 in this setup, mapped to container port 6379).
-
-### 3. Set up Backend (FastAPI) - Terminal 2
-
-This runs the API server and the task polling mechanism.
-```
-# Navigate to the backend directory
+```bash
 cd backend
-
-# Create and activate a virtual environment
 python -m venv venv
-# On Windows:
+
+# Windows:
 .\venv\Scripts\activate
-# On macOS/Linux:
+# macOS/Linux:
 # source venv/bin/activate
 
-# Install backend dependencies FROM the requirements file
-python -m pip install -r requirements.txt 
-
-# Run the FastAPI server
+pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
-![Terminal 2](./images/terminal2.png)
+Server runs at **http://localhost:8000**
 
-(Server will run on http://localhost:8000)
+### 4. Start the frontend (React) — Terminal 3
 
-### 4. Set up Frontend (React) - Terminal 3
-
-This runs the user interface.
-```
-# Navigate to the frontend directory
+```bash
 cd frontend
-
-# Install frontend dependencies
 npm install
-
-# Run the React development server
 npm start
 ```
 
-(App will open at http://localhost:3000 or the next available port like 3001).
+App opens at **http://localhost:3000**
 
-### 5. Set up Worker (Celery) - Terminal 4
+### 5. Start the Celery worker — Terminal 4
 
-This process waits for and executes tasks from the Redis queue.
-```
-# Navigate to the worker directory
+```bash
 cd worker
-
-# Create and activate a virtual environment
 python -m venv venv
-# On Windows:
+
+# Windows:
 .\venv\Scripts\activate
-# On macOS/Linux:
+# macOS/Linux:
 # source venv/bin/activate
 
-# Install worker dependencies FROM the requirements file
-python -m pip install -r requirements.txt
-
-# Run the Celery worker (use --pool=solo on Windows)
+pip install -r requirements.txt
 celery -A tasks worker --loglevel=INFO --pool=solo
 ```
 
-![Terminal 4](./images/terminal4.png)
+### 6. Start Celery Beat (scheduler) — Terminal 5
 
-
-### 6. Set up Beat (Celery Scheduler) - Terminal 5
-
-This process periodically triggers the task checker defined in tasks.py.
-```
-# Navigate to the worker directory
+```bash
 cd worker
 
-# Activate the virtual environment (if not already active in this terminal)
-# On Windows:
+# Activate the same venv
 .\venv\Scripts\activate
-# On macOS/Linux:
-# source venv/bin/activate
 
-# Run the Celery beat scheduler
 celery -A tasks beat --loglevel=INFO
 ```
 
-![Terminal 5](./images/terminal5.png)
+### Environment Variables
 
-## 📁 Project Structure
+The `.env` file contains port configuration:
+
 ```
-/
-├── backend/            # FastAPI application, API endpoints, periodic checker
-│   ├── venv/
-│   ├── main.py
-│   └── requirements.txt
-├── frontend/           # React application (UI)
-│   ├── node_modules/
-│   ├── public/
-│   ├── src/
-│   ├── package.json
-│   └── ...
-├── worker/             # Celery worker and beat configuration
-│   ├── venv/
-│   ├── tasks.py
-│   └── requirements.txt
-├── .gitignore          # Files ignored by Git
-├── docker-compose.yml  # Defines Mongo & Redis services
-└── README.md           # This file
+MONGO_HOST_PORT=27017
+REDIS_HOST_PORT=6340
+FASTAPI_PORT=8080
 ```
 
-## ✨ Features & Results
+> **Note:** These values are currently not read by the application code — ports are hardcoded. See the "Known Issues" section below.
 
-Schedule tasks with name, cron string, start date, and end date via a web UI (React + Chakra UI).
+## API Endpoints
 
-View a list of currently scheduled tasks fetched from the database.
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/tasks` | Create a new scheduled task |
+| `GET` | `/tasks` | List all task schedules |
+| `GET` | `/tasks/queue` | List tasks currently in the execution queue |
+| `DELETE` | `/tasks/{task_id}` | Delete a task schedule by its MongoDB ID |
+| `POST` | `/tasks/{task_name}/cancel` | Cancel a running task (sets a Redis flag) |
 
-Delete scheduled tasks via the UI.
+### Example: Create a Task
 
-Expired tasks are visually indicated (grayed out/strikethrough).
-
-FastAPI backend periodically checks MongoDB for tasks due to run (within start/end dates).
-
-Due tasks are pushed to a Redis list acting as a queue.
-You can check , number of pending task, by running following command in TERMINAL 1:
+```json
+POST /tasks
+{
+  "task_name": "daily_sales_report",
+  "cron": "0 2 * * *",
+  "start_date": "2026-01-01T00:00:00+00:00",
+  "end_date": "2026-12-31T23:59:59+00:00",
+  "priority": 1,
+  "task_config": {
+    "operator_path": "operators/example_operator.py",
+    "payload": { "task_name": "daily_sales_report" },
+    "connection": {}
+  }
+}
 ```
-docker-compose exec redis redis-cli llen task_queue
+
+## Checking the Redis Queue
+
+To see how many tasks are pending in the Redis queue:
+
+```bash
+docker-compose exec redis redis-cli llen batch_run
 ```
 
-Celery Beat periodically triggers a task checker defined in tasks.py (every 5 seconds) : TERMINAL 5.
+## Known Issues / TODOs
 
-Celery Worker picks up task names from the Redis queue and executes the corresponding task (prints task name to its console) : TERMINAL 4.
+- **Hardcoded connection strings** — MongoDB URI, Redis host/port, and CORS origins are hardcoded in the source code rather than read from environment variables or `.env`
+- **Duplicate task names** — No uniqueness constraint on `task_name`; creating two tasks with the same name can cause undefined behavior in cancellation and cleanup
+- **`fun_done()` loop not started** — The `TaskManager.fun_done()` background loop (cleans completed tasks from queue_table) is defined but not called in `main.py`'s lifespan
+- **CRA boilerplate** — Frontend still contains unused Create React App files (`App.test.js`, `setupTests.js`, `reportWebVitals.js`, `logo.svg`, default `App.css`)
+- **No authentication** — All API endpoints are publicly accessible
+- **No HTTPS** — Runs entirely over HTTP
+- **`aws console.txt`** — Contains an AWS Lambda handler stub; appears to be a development artifact

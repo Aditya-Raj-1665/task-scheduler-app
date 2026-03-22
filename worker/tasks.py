@@ -1,16 +1,19 @@
-import os
 import json
-# import boto3
-from celery import Celery
-from celery.schedules import crontab
-import redis
-# from botocore.exceptions import ClientError
-from pymongo import MongoClient
-from bson.objectid import ObjectId
 import subprocess
 import sys
+import os
+import ast
 import threading
 import time
+from datetime import datetime, timezone
+
+from celery import Celery
+import redis
+from pymongo import MongoClient
+
+# Add backend directory to sys.path so we can import TaskState and ExecutionAttempt
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
+from models import TaskState, ExecutionAttempt
 
 mongo_client = MongoClient("mongodb://localhost:27017")
 db = mongo_client.tasks_db
@@ -21,32 +24,48 @@ app = Celery('tasks',
 
 redis_list_client = redis.Redis(host='localhost', port=6340, db=0)
 
-# LAMBDA_REGION = os.getenv("AWS_REGION", "eu-north-1") 
-# lambda_client = boto3.client('lambda', region_name=LAMBDA_REGION)
+
+def validate_operator(operator_path: str) -> bool:
+    """Validate that the script contains a class inheriting from BaseOperator and having initialize, run, finish."""
+    try:
+        if not os.path.exists(operator_path):
+            return False
+            
+        with open(operator_path, 'r', encoding='utf-8') as f:
+            tree = ast.parse(f.read())
+            
+        classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+        
+        for cls in classes:
+            bases = [b.id for b in cls.bases if isinstance(b, ast.Name) and hasattr(b, 'id')]
+            if 'BaseOperator' not in bases:
+                continue
+                
+            methods = [m.name for m in cls.body if isinstance(m, ast.FunctionDef)]
+            if 'initialize' in methods and 'run' in methods and 'finish' in methods:
+                return True
+                
+        return False
+    except Exception as e:
+        print(f"[Worker] Failed to validate operator script at {operator_path}: {e}")
+        return False
+
 
 @app.task
 def check_redis_queue():
-
     print("[Celery Beat]: Checking Redis 'batch_run'...")
-
+    
     task_done=0
     while True:
-
         task_name_bytes = redis_list_client.rpop("batch_run")
-
         if not task_name_bytes:
             break
-        
+
         task_name = task_name_bytes.decode('utf-8')
         print(f"[Celery Beat]: Found task! '{task_name}'. Sending to worker...")
 
         execute_operator_task.delay(task_name)
-        # print_the_name.delay(task_name)
-        #invoke_lambda_task.delay(task_name)
-
-        #MARK IT AS COMPLETED
-        # mark_completed.delay(task_name)
-
+        # print_the_name.delay(task_name)        
         task_done+=1
 
     if task_done>0:
@@ -65,27 +84,54 @@ def print_the_name(task_name):
 
 
 @app.task
-def delete_task_from_queue_table_and_schedules_table(task_name):
-    db.queue_table.delete_one({"task_name" : task_name})
-    db["schedules"].delete_one({"task_name" : task_name})
-    print(f"delete kardiya {task_name}")
+def mark_task_completed(task_name):
+    """Mark a task as COMPLETED in both queue_table and schedules after successful execution."""
+    db.queue_table.update_one({"task_name": task_name}, {"$set": {"state": TaskState.COMPLETED.value}})
+    db["schedules"].update_one({"task_name": task_name}, {"$set": {"state": TaskState.COMPLETED.value}})
+    print(f"marked task as completed - {task_name}")
+
+@app.task
+def mark_task_state(task_name: str, state: str, fail_reason: str = None):
+    """Updates the state of a task in the database."""
+    update_data = {"state": state}
+    db.queue_table.update_one({"task_name": task_name}, {"$set": update_data})
+    db["schedules"].update_one({"task_name": task_name}, {"$set": update_data})
+    print(f"[Worker] Updated state for '{task_name}' to {state}")
+
+
 
 def get_task_config(task_name: str):
-    """Fetch task doc from MongoDB and return (doc, config) or (None, None)."""
+    """Fetch a task document from MongoDB and extract its config.
+
+    Args:
+        task_name: Name of the task to look up in queue_table.
+
+    Returns:
+        Tuple of (task_doc, config) if found and valid, or (None, None) otherwise.
+    """
     task_doc = db.queue_table.find_one({"task_name": task_name})
     if not task_doc:
         print(f"[Worker] '{task_name}' not found in queue_table. Skipping.")
         return None, None
-    
+
     config = task_doc.get("task_config", {})
     if not config.get("operator_path"):
         print(f"[Worker] No operator_path in task_config for '{task_name}'. Skipping.")
         return None, None
-    
+
     return task_doc, config
 
+
 def spawn_operator_process(task_name: str, config: dict):
-    """Spawn operator script as subprocess, return the process."""
+    """Spawn an operator script as a subprocess.
+
+    Args:
+        task_name: Name of the task (used for logging).
+        config: Task config dict containing operator_path, payload, and connection.
+
+    Returns:
+        subprocess.Popen instance for the spawned operator process.
+    """
     operator_path = config["operator_path"]
     payload = config.get("payload", {})
     connection = config.get("connection", {})
@@ -101,10 +147,23 @@ def spawn_operator_process(task_name: str, config: dict):
     print(f"[Worker] '{task_name}' started as PID: {process.pid}")
     return process
 
+
 def run_watchdog(task_name: str, process, timeout_seconds: int,
                  cancelled: threading.Event, timed_out: threading.Event,
                  run_done: threading.Event):
-    """Watches for cancel signal (Redis) or timeout, terminates process if needed."""
+    """Watch for cancel signals (Redis) or timeout, and terminate the process if needed.
+
+    Runs in a daemon thread alongside the operator subprocess. Polls Redis for
+    a cancel:{task_name} key and checks the monotonic clock against the deadline.
+
+    Args:
+        task_name: Name of the task being watched.
+        process: subprocess.Popen instance to terminate if needed.
+        timeout_seconds: Maximum allowed runtime in seconds.
+        cancelled: Event to set if a cancel signal is detected.
+        timed_out: Event to set if the timeout is exceeded.
+        run_done: Event that signals the main thread has finished waiting.
+    """
     deadline = time.monotonic() + timeout_seconds
     while not run_done.is_set():
         if redis_list_client.exists(f"cancel:{task_name}"):
@@ -121,35 +180,108 @@ def run_watchdog(task_name: str, process, timeout_seconds: int,
             return
 
         time.sleep(1)
-        
+
+
 def handle_process_result(task_name: str, exit_code: int,
-                           cancelled: threading.Event, timed_out: threading.Event,
-                           stdout: str, stderr: str):
-    """Handle post-process cleanup based on exit code."""
+                          cancelled: threading.Event, timed_out: threading.Event,
+                          stdout: str, stderr: str, start_time: datetime, attempt_num: int = 1):
+    """Handle post-process cleanup based on exit code and watchdog signals.
+
+    Args:
+        task_name: Name of the completed task.
+        exit_code: Process return code.
+        cancelled: Event indicating whether the task was cancelled.
+        timed_out: Event indicating whether the task timed out.
+        stdout: Captured stdout from the subprocess.
+        stderr: Captured stderr from the subprocess.
+        start_time: Process start time
+        attempt_num: execution attempt number
+
+    Returns:
+        "success" if exit code is 0, "failed" if cancelled/timed out, "retry" otherwise.
+    """
     if stdout: print(f"[Worker] STDOUT:\n{stdout}")
     if stderr: print(f"[Worker] STDERR:\n{stderr}")
     print(f"[Worker] '{task_name}' exited with code {exit_code}")
 
-    if exit_code == 0:
-        delete_task_from_queue_table_and_schedules_table.delay(task_name)
-        return "success"
-    elif cancelled.is_set() or timed_out.is_set():
-        db.queue_table.update_one(
-            {"task_name": task_name},
-            {"$set": {"status": "FAILED"}}
-        )
-        return "failed"
+    end_time = datetime.now(timezone.utc)
+    fail_reason = None
+    state_to_set = None
+
+    if cancelled.is_set():
+        state_to_set = TaskState.CANCELLED.value
+        fail_reason = "Task was cancelled."
+        result = "failed"
+    elif timed_out.is_set():
+        state_to_set = TaskState.TIMED_OUT.value
+        fail_reason = "Task timed out."
+        result = "failed"
+    elif exit_code == 0:
+        state_to_set = TaskState.COMPLETED.value
+        result = "success"
     else:
-        return "retry"
+        state_to_set = TaskState.FAILED.value
+        fail_reason = f"Exited with non-zero code {exit_code}\nSTDERR: {stderr}"
+        result = "retry"
+
+    execution_attempt = ExecutionAttempt(
+        attempt_number=attempt_num,
+        started_at=start_time,
+        ended_at=end_time,
+        state=state_to_set if result != "retry" else TaskState.FAILED.value,
+        fail_reason=fail_reason
+    ).model_dump(mode="json")
     
+    # Push execution attempt to history
+    update_query = {
+        "$push": {"execution_history": execution_attempt}
+    }
+    
+    # We update the state in DB depending on result
+    if result == "success":
+        update_query["$set"] = {
+            "state": TaskState.COMPLETED.value,
+            "completed_at": end_time.isoformat()
+        }
+    elif result == "failed":
+        update_query["$set"] = {
+            "state": state_to_set, # CANCELLED or TIMED_OUT
+            "cancelled_at": end_time.isoformat() if cancelled.is_set() else None
+        }
+    
+    db.queue_table.update_one({"task_name": task_name}, update_query)
+    db["schedules"].update_one({"task_name": task_name}, update_query)
+    
+    return result
+
+
 @app.task(bind=True, max_retries=3)
 def execute_operator_task(self, task_name: str):
+    """Execute a task by spawning its operator script as a subprocess.
+
+    Fetches task config from MongoDB, spawns the operator, starts a watchdog
+    thread for cancel/timeout monitoring, and handles the result.
+
+    Args:
+        task_name: Name of the task to execute.
+    """
     task_doc, config = get_task_config(task_name)
     if not config:
+        mark_task_state(task_name, TaskState.INVALID.value)
         return
+
+    operator_path = config.get("operator_path")
+    if not operator_path or not validate_operator(operator_path):
+        print(f"[Worker] Script validation failed for '{task_name}' at {operator_path}")
+        mark_task_state(task_name, TaskState.INVALID.value)
+        return
+        
+    mark_task_state(task_name, TaskState.RUNNING.value)
 
     timeout_seconds = config.get("timeout_seconds", 3600)
     process = spawn_operator_process(task_name, config)
+    start_time = datetime.now(timezone.utc)
+    attempt_num = self.request.retries + 1
 
     cancelled = threading.Event()
     timed_out = threading.Event()
@@ -167,77 +299,25 @@ def execute_operator_task(self, task_name: str):
     watchdog_thread.join(timeout=5)
 
     exit_code = process.returncode
-    result = handle_process_result(task_name, exit_code, cancelled, timed_out, stdout, stderr)
-    if result == "retry":
-        raise self.retry(countdown=30)
-
-@app.task
-def mark_completed(task_name):
-    print(f"[Celery Worker]: Marking task '{task_name}' as completed...")
+    result = handle_process_result(task_name, exit_code, cancelled, timed_out, stdout, stderr, start_time, attempt_num)
     
-    client = None
-    try:
-        client = MongoClient("mongodb://localhost:27017")
-        db = client.tasks_db
+    if result == "retry":
+        db.queue_table.update_one({"task_name": task_name}, {"$inc": {"num_of_retries": 1}})
+        db["schedules"].update_one({"task_name": task_name}, {"$inc": {"num_of_retries": 1}})
         
-        result = db.queue_table.update_one(
-            {"task_name": task_name, "status": "running"}, 
-            {"$set": {"status": "completed"}}
-        )
-        
-        if result.matched_count > 0:
-            print(f"[Celery Worker]: Successfully marked '{task_name}' as completed.")
+        # Check max_retries
+        max_retries = task_doc.get("max_retries", 3)
+        if attempt_num >= max_retries:
+            mark_task_state(task_name, TaskState.EXHAUSTED.value)
         else:
-            print(f"[Celery Worker]: WARNING: Could not find task '{task_name}' in 'running' state to mark as completed.")
-            
-    except Exception as e:
-        print(f"[Celery Worker]: ERROR connecting to MongoDB: {e}")
-    finally:
-        if client:
-            client.close()
-
-
-
-
-@app.task
-def invoke_lambda_task(task_name):
-    print("-----------------------------------")
-    print(f"[Celery Worker]: EXECUTING TASK: Invoking Lambda for '{task_name}'")
-
-    FUNCTION_NAME = "taskScheduler" 
-
-    payload = {
-        "task_name": task_name  
-    }
-
-    try:
-        response = lambda_client.invoke(
-            FunctionName="taskScheduler",
-            InvocationType='RequestResponse', 
-            Payload=json.dumps(payload)      
-        )
-
-        response_payload = json.loads(response['Payload'].read().decode('utf-8'))
-
-        print(f"[Celery Worker]: Lambda Response: {response_payload}")
-        print("-----------------------------------")
-
-        return f"Lambda invoked. Response: {response_payload}"
-
-    except ClientError as e:
-        print(f"[Celery Worker]: ERROR invoking Lambda: {e}")
-        print("-----------------------------------")
-        return f"Error: {e}"
-    except Exception as e:
-        print(f"[Celery Worker]: UNEXPECTED ERROR: {e}")
-        print("-----------------------------------")
-        return f"Error: {e}"
+            mark_task_state(task_name, TaskState.RETRY.value)
+            raise self.retry(countdown=30)
 
 
 app.conf.beat_schedule = {
     'check-redis-every-5-seconds': {
-        'task': 'tasks.check_redis_queue', 
-        'schedule': 5.0,  
-    },  
+        'task': 'tasks.check_redis_queue',
+        'schedule': 5.0,
+    },
 }
 app.conf.timezone = 'Asia/Kolkata'

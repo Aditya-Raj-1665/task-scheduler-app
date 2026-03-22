@@ -8,8 +8,21 @@ import os
 
 from models import TaskInput, TaskInDB
 
+
 class TaskManager:
+    """Core scheduler engine that manages task lifecycle.
+
+    Handles task creation, scheduling, queue management, and database operations.
+    Reads configuration from config.json for parallelism settings.
+    """
+
     def __init__(self, db, redis_client):
+        """Initialize TaskManager with database and cache connections.
+
+        Args:
+            db: Motor async MongoDB database instance.
+            redis_client: Async Redis client instance.
+        """
         self.db = db
         self.redis = redis_client
 
@@ -17,90 +30,102 @@ class TaskManager:
         with open(config_path, 'r') as f:
             config = json.load(f)
             self.max_parallelism = config.get("max_parallelism", 10)
-            # print(self.max_parallelism)
-        
-        #self.db
-        #self.redis
-        #self.max_parallelism
 
-
-
-    #FUNC_FIND
     async def date_time_criteria(self):
-        current_time = datetime.now()
+        """Query MongoDB for tasks that are due to run right now.
 
-        date_and_time_criteria ={
-            "start_date":{
-                "$lte": current_time
-            },
-            "end_date":{
-                "$gte": current_time
-            }
+        Finds tasks where the current UTC time falls within [start_date, end_date]
+        and next_run is at or before the current time.
+
+        Returns:
+            List of dicts with task_name and priority for each due task.
+        """
+        current_time = datetime.now(timezone.utc)
+
+        date_and_time_criteria = {
+            "start_date": {"$lte": current_time},
+            "end_date": {"$gte": current_time},
+            "next_run": {"$lte": current_time},
+            "state": "PENDING"
         }
 
         attributes_to_include_in_list = {
-            "task_name":1,
-            "priority":1
+            "task_name": 1,
+            "priority": 1
         }
 
-        tasks_ready_to_run_based_on_date_condition = await self.db.schedules.find(date_and_time_criteria,attributes_to_include_in_list).to_list(length=None)
-        return tasks_ready_to_run_based_on_date_condition
-
-
-
+        tasks_ready = await self.db.schedules.find(
+            date_and_time_criteria, attributes_to_include_in_list
+        ).to_list(length=None)
+        return tasks_ready
 
     async def run_scheduler_loop(self):
-        MAX_PARALLELISM = self.max_parallelism
-        
+        """Background loop that polls for due tasks every 60 seconds.
+
+        Queries for tasks matching date/time criteria, passes them through the
+        queue manager for priority sorting, and pushes eligible task names into
+        the Redis 'batch_run' list (respecting max_parallelism).
+        """
         while True:
             print("starting the loop...")
-            
-            tasks_ready_to_run_based_on_date_condition = await self.date_time_criteria()
+            tasks_ready = await self.date_time_criteria()
+            prioritized_tasks = await self.fun_queue_manager(tasks_ready)
 
+            task_names = [t["task_name"] for t in prioritized_tasks]
 
-            tasks_ready_to_run_based_on_date_condition_and_priority_and_max_parallelism = await self.fun_queue_manager(tasks_ready_to_run_based_on_date_condition)
-
-            # made a list of just names, from json
-            tasks_names_to_push_in_redis = [t["task_name"] for t in tasks_ready_to_run_based_on_date_condition_and_priority_and_max_parallelism]
-
-            if tasks_names_to_push_in_redis:    
-                for t in tasks_names_to_push_in_redis:
-
+            if task_names:
+                for t in task_names:
                     current_redis_length = await self.redis.llen("batch_run")
-
-                    if(current_redis_length < MAX_PARALLELISM):
+                    if current_redis_length < self.max_parallelism:
                         await self.redis.lpush("batch_run", t)
 
             else:
                 print("no task to put in redis")
 
-            # return tasks_names_to_push_in_redis
-
-            # print("will run after 60 seconds")
             await asyncio.sleep(60)
 
+    async def fun_queue_manager(self, tasks_ready):
+        """Insert new tasks into queue_table and return top priority tasks.
 
+        Compares incoming ready tasks against what's already in the queue_table,
+        inserts only new ones, then returns the top N tasks sorted by priority
+        (where N = max_parallelism).
 
-    async def fun_queue_manager(self,tasks_ready_to_run_based_on_date_condition : list):
+        Args:
+            tasks_ready: List of task dicts from date_time_criteria().
 
-        all_tasks_in_queue_table = await self.db.queue_table.find().to_list(length=None) 
+        Returns:
+            List of task dicts sorted by priority, limited to max_parallelism.
+        """
+        all_queued = await self.db.queue_table.find().to_list(length=None)
+        new_tasks = [item for item in tasks_ready if item not in all_queued]
 
-        # new_tasks_for_queue_table = tasks_ready_to_run_based_on_date_condition - all_tasks_in_queue_table
-        new_tasks_for_queue_table = [item for item in tasks_ready_to_run_based_on_date_condition if item not in all_tasks_in_queue_table]
+        if new_tasks:
+            await self.db.queue_table.insert_many(new_tasks)
+
+        prioritized = await self.db.queue_table.find().sort(
+            "priority", 1
+        ).limit(self.max_parallelism).to_list(length=None)
+
+        return prioritized
+
+    async def create_schedule(self, task: TaskInput):
+        print(f"[TaskManager]: Creating new schedule: {task.task_name}")
         
-        if new_tasks_for_queue_table:
-            await self.db.queue_table.insert_many(new_tasks_for_queue_table)
+        """Create a new task schedule in MongoDB.
 
+        Validates the cron expression, calculates the first run time, and
+        inserts the task document into the schedules collection.
 
-        MAX_PARALLELISM = self.max_parallelism
-        tasks_ready_to_run_based_on_date_condition_and_priority_and_max_parallelism = await self.db.queue_table.find().sort("priority", 1).limit(MAX_PARALLELISM).to_list(length=None)
+        Args:
+            task: Validated TaskInput from the API request.
 
-        return tasks_ready_to_run_based_on_date_condition_and_priority_and_max_parallelism
+        Returns:
+            Dict with success message and computed first_run datetime.
 
-
-
-    async def create_schedule(self, task: TaskSchedule):
-        print(f"[TaskManager]: Creating new schedule: {task.name}")
+        Raises:
+            HTTPException: If the cron string is invalid or first run is after end_date.
+        """
         now = datetime.now(timezone.utc)
         start_date_utc = task.start_date.astimezone(timezone.utc)
         iterator_start_time = max(now, start_date_utc)
@@ -111,7 +136,10 @@ class TaskManager:
             raise HTTPException(status_code=400, detail=f"Invalid cron string: {e}")
 
         if first_run > task.end_date.astimezone(timezone.utc):
-            raise HTTPException(status_code=400, detail="First run time is after the end date. Task will never run.")
+            raise HTTPException(
+                status_code=400,
+                detail="First run time is after the end date. Task will never run."
+            )
 
         task_doc = task.model_dump()
         task_doc["next_run"] = first_run
@@ -119,47 +147,98 @@ class TaskManager:
         await self.db.schedules.insert_one(task_doc)
         return {"message": "Task schedule created", "first_run": first_run}
 
-
     async def get_all_schedules(self):
-        """
-        Fetches all task schedules from the MongoDB database.
+        """Fetch all task schedules from the MongoDB schedules collection.
+
+        Returns:
+            List of TaskInDB instances for every document in the collection.
         """
         tasks_list = []
         due_tasks_cursor = self.db.schedules.find({})
         async for task in due_tasks_cursor:
-            tasks_list.append(TaskInDB(**task))
+            tasks_list.append(TaskInDB.from_mongo(task))
         return tasks_list
 
+    async def get_queued_tasks(self):
+        """Fetch all tasks currently in the queue_table.
+
+        Returns:
+            List of task dicts with _id converted to string for JSON serialization.
+        """
+        tasks = await self.db.queue_table.find().to_list(length=None)
+        for task in tasks:
+            task["_id"] = str(task["_id"])
+        return tasks
 
     async def delete_schedule(self, task_id: str):
+        """Delete a task schedule by its MongoDB ObjectId.
+
+        Args:
+            task_id: String representation of the MongoDB ObjectId.
+
+        Returns:
+            Dict with success message.
+            
+        Raises:
+            HTTPException: If the ID format is invalid or the task is not found.
+        """
+        from bson import ObjectId
+        from fastapi import HTTPException
         try:
             object_id_to_delete = ObjectId(task_id)
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid task ID format")
 
         delete_result = await self.db.schedules.delete_one({"_id": object_id_to_delete})
-        
+
         if delete_result.deleted_count == 1:
             return {"message": "Task deleted successfully"}
         else:
             raise HTTPException(status_code=404, detail="Task not found")
+        
+    async def pause_task(self, task_name: str):
+        """Pause a scheduled task by updating state to PAUSED."""
+        from fastapi import HTTPException
+        result = await self.db.schedules.update_one({"task_name": task_name}, {"$set": {"state": "PAUSED"}})
+        await self.db.queue_table.update_one({"task_name": task_name}, {"$set": {"state": "PAUSED"}})
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Task not found.")
+        return {"message": f"Task {task_name} paused successfully"}
 
+    async def resume_task(self, task_name: str):
+        """Resume a paused task by updating state to PENDING."""
+        from fastapi import HTTPException
+        result = await self.db.schedules.update_one({"task_name": task_name}, {"$set": {"state": "PENDING"}})
+        await self.db.queue_table.update_one({"task_name": task_name}, {"$set": {"state": "PENDING"}})
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Task not found.")
+        return {"message": f"Task {task_name} resumed successfully"}
+
+    async def run_task_adhoc(self, task_name: str):
+        """Trigger a task immediately by pushing it to Redis directly."""
+        from fastapi import HTTPException
+        task = await self.db.schedules.find_one({"task_name": task_name})
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found in schedules")
+        
+        # Upsert it into queue table so execution logic finds it there
+        task.pop('_id', None) # remove _id if exists
+        task['state'] = 'PENDING'
+        await self.db.queue_table.update_one(
+            {"task_name": task_name},
+            {"$set": task},
+            upsert=True
+        )
+        
+        await self.redis.lpush("batch_run", task_name)
+        return {"message": f"Task {task_name} queued for ad-hoc execution"}
 
     async def fun_done(self):
+        """Background loop for cleanup if needed in future.
+        Currently doing nothing to preserve completed tasks.
+        """
         while True:
-            await asyncio.sleep(30) 
-            
-            print(f"[TaskManager Loop 3]: Waking up to clean 'queue_table' of completed tasks...")
-            
-            try:
-                delete_result = await self.db.queue_table.delete_many(
-                    {"status": "completed"}
-                )
-                if delete_result.deleted_count > 0:
-                    print(f"[TaskManager Loop 3]: Cleaned up {delete_result.deleted_count} completed tasks.")
-                else:
-                    print(f"[TaskManager Loop 3]: No completed tasks to clean up.")
-            except Exception as e:
-                print(f"[TaskManager Loop 3]: ERROR during cleanup: {e}")
+            await asyncio.sleep(86400)
+
 
 

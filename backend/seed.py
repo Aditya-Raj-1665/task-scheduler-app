@@ -1,4 +1,3 @@
-import os
 from pymongo import MongoClient
 from datetime import datetime, timedelta, timezone
 from croniter import croniter
@@ -11,6 +10,12 @@ NUM_TASKS_TO_CREATE = 100
 # ---------------------
 
 def seed_database():
+    """Populate MongoDB with test tasks for load testing.
+
+    Creates NUM_TASKS_TO_CREATE tasks with cron schedule '*/1 * * * *',
+    rotating priorities, and a 1-day active window. Cleans up any previous
+    load test tasks before inserting.
+    """
     print("🌱 Starting database seeding process...")
     
     try:
